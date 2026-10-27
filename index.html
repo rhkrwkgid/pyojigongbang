@@ -357,7 +357,7 @@ textarea:focus{border-color:var(--accent);outline:none;box-shadow:0 0 0 3px var(
 
   <div class="banner" id="banner">
     <p>지금은 <b>예시 학생과 예시 시간표</b>로 채워져 있어요. 내 정보와 시간표로 바꾸면 표지에 바로 반영돼요.</p>
-    <div class="acts"><button class="btn primary" id="clearSample">예시 지우고 시작</button><button class="btn ghost" id="hideBanner">닫기</button></div>
+    <div class="acts"><button class="btn" id="bannerDemo">AI 읽기 체험</button><button class="btn primary" id="clearSample">예시 지우고 시작</button><button class="btn ghost" id="hideBanner">닫기</button></div>
   </div>
 
   <main>
@@ -805,9 +805,10 @@ function addFiles(list){
     const f = {id:uid(), file, sample:false, name:file.name, type, size:file.size, subjectId:m.id, reason:m.reason,
       title:cleanTitle(file.name, m.id), kind:guessKind(file.name, type), date:todayISO(), error:null,
       meta: type === 'image' ? '사진 1장' : type === 'docx' ? '워드 · 간이 변환' : 'PDF'};
+    if(file.__demo){ f.demo = file.__demo; f.meta = '데모 문서'; }
     files.push(f); added++;
     if(type === 'pdf') countPages(f);
-    if(S.ai.on) queueAI(f);
+    if(S.ai.on || f.demo) queueAI(f);
   }
   if(added){ selectedId = files[files.length-1].id; designCat = null; renderDesign(); toast(`${added}개 파일을 넣었어요.`); }
   renderFiles(); schedule();
@@ -963,14 +964,15 @@ function aiErr(e){
 function queueAI(f){ aiQueue = aiQueue.then(() => analyze(f)).catch(() => {}); }
 async function analyze(f){
   if(f.sample || !files.includes(f)) return;
-  const be = await aiBackend();
+  const be = f.demo ? {kind:'demo'} : await aiBackend();
   if(!be){ f.ai = {state:'nokey'}; renderFiles(); return; }
   f.ai = {state:'reading'}; renderFiles();
   try{
-    const ex = await extractForAI(f);
+    const ex = f.demo ? {text:f.demo.text, images:[], pages:1} : await extractForAI(f);
     if(!ex.text && !ex.images.length) throw Object.assign(new Error('empty'), {friendly:'읽을 내용이 없는 파일이에요.'});
     const p = aiPrompt(f, ex);
-    const out = be.kind === 'claude'
+    const out = be.kind === 'demo' ? await demoOut(f)
+      : be.kind === 'claude'
       ? await be.fn.json(p, {images: ex.images.length ? ex.images : undefined, modelTier:'quick', cache:false})
       : parseJSON(await callAPI(p, ex.images, 900));
     const t = f.touched || {};
@@ -1007,7 +1009,7 @@ async function analyze(f){
       .filter(e => e.field && e.quote)
       .map(e => ex.text ? ({...e, ok: nz(ex.text).includes(nz(e.quote)) || nz(f.name).includes(nz(e.quote))}) : ({...e, img:true, ok:true}))
       .filter(e => e.ok);
-    f.ai = {state:'done', scanned:!!ex.scanned, pages:ex.pages, by: be.kind === 'claude' ? 'Claude' : prov().label};
+    f.ai = {state:'done', scanned:!!ex.scanned, pages:ex.pages, by: be.kind === 'demo' ? '데모 AI' : be.kind === 'claude' ? 'Claude' : prov().label};
   }catch(e){ console.error(e); f.ai = {state:'error', msg:aiErr(e)}; }
   if(f.id === selectedId){ designCat = catOf(f); renderDesign(); }
   renderFiles(); renderTasks(); renderTaskLine(); schedule();
@@ -1287,6 +1289,63 @@ function linksFor(text){
   return (S.links||[]).filter(l => l.label && okUrl(l.url) && t.includes(l.label.toLowerCase().replace(/[\s-]/g,'')));
 }
 
+/* ---------- 데모 모드: 키 없이 AI 읽기 체험 ---------- */
+const DEMO_DOCS = [
+  {name:'조직행동론_6주차_강의자료.png', head:'조직행동론 6주차', sub:'리더십 이론: 특성론에서 변혁적 리더십까지', meta:'담당 교수 최민아 · 경영학과 전공선택',
+   body:['학습목표', '1. 리더십 특성 이론과 행동 이론의 차이를 설명할 수 있다.', '2. 변혁적 리더십의 네 가지 요소를 사례에 적용할 수 있다.', '', '1. 리더십이란 무엇인가', '집단이 목표를 이루도록 영향을 미치는 능력', '', '2. 변혁적 리더십의 네 요소', '이상적 영향력 · 영감적 동기부여 · 지적 자극 · 개별적 배려'],
+   out:{title:'6주차 리더십 이론', subject:'조직행동론', kind:'강의자료', summary:'특성론부터 변혁적 리더십까지 리더십 이론 정리', confidence:.95, assignment:null, team:null, matchTask:null,
+     evidence:[{field:'용도', quote:'학습목표', page:1}, {field:'과목', quote:'조직행동론 6주차', page:1}, {field:'제목', quote:'리더십 이론: 특성론에서 변혁적 리더십까지', page:1}]}},
+  {name:'마케팅원론_과제2_안내.png', head:'마케팅원론 과제 2 안내', sub:'국내 브랜드 4P 전략 비교 분석', meta:'담당 교수 이서윤 · 02분반',
+   body:['과제 내용', '국내 브랜드 두 곳을 골라 4P(제품·가격·유통·촉진) 전략을 비교하시오.', '', '분량: A4 4매 이내 (표지 제외)', '제출 기한: {DUE} 오후 6시까지', '제출 방법: e-campus 과제함 업로드', '', '평가 기준', '분석의 구체성 40% · 자료 근거 30% · 구성과 표현 30%'],
+   out:{title:'과제2 안내: 4P 전략 비교', subject:'마케팅원론', kind:'강의자료', summary:'국내 브랜드 두 곳의 4P 전략 비교 과제 안내', confidence:.95,
+     assignment:{title:'과제2 4P 전략 비교 분석', dueOffset:2, time:'18:00', length:'A4 4매 이내', how:'e-campus 과제함 업로드', team:false}, team:null, matchTask:null,
+     evidence:[{field:'용도', quote:'과제 내용', page:1}, {field:'마감일', quote:'제출 기한: {DUE} 오후 6시까지', page:1}, {field:'과목', quote:'마케팅원론 과제 2 안내', page:1}]}},
+  {name:'팀프로젝트_중간보고_최종.png', head:'팀 프로젝트 중간 보고서', sub:'대학생 아르바이트 동기부여 실태 조사', meta:'조직행동론 · 3조',
+   body:['3조  김하늘 2024123456 · 박서준 2024123478', '      이지민 2024123490 · 최유나 2023123411', '', 'Ⅰ. 서론', '연구 배경과 목적', '', 'Ⅱ. 조사 방법', '재학생 120명 대상 온라인 설문', '', 'Ⅲ. 중간 결과'],
+   out:{title:'팀 프로젝트 중간 보고서', subject:'조직행동론', kind:'리포트', summary:'대학생 아르바이트 동기부여 설문 중간 결과', confidence:.9, assignment:null, matchTask:'팀 프로젝트',
+     team:{name:'3조', members:[{name:'김하늘',sid:'2024123456'},{name:'박서준',sid:'2024123478'},{name:'이지민',sid:'2024123490'},{name:'최유나',sid:'2023123411'}]},
+     evidence:[{field:'조원', quote:'3조  김하늘 2024123456', page:1}, {field:'용도', quote:'Ⅰ. 서론', page:1}, {field:'과목', quote:'조직행동론 · 3조', page:1}]}},
+];
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+function dueText(){ const d = parseISO(isoPlus(2)); return `${d.getMonth()+1}월 ${d.getDate()}일`; }
+const fillDue = x => String(x).replace('{DUE}', dueText());
+async function demoFile(d){
+  d = {...d, body: d.body.map(fillDue)};
+  const cv = document.createElement('canvas'); cv.width = 1240; cv.height = 1754;
+  const c = cv.getContext('2d'); c.fillStyle = '#fff'; c.fillRect(0,0,cv.width,cv.height);
+  c.fillStyle = '#0D326F'; c.fillRect(0,0,cv.width,16);
+  c.textBaseline = 'alphabetic'; c.fillStyle = '#111';
+  c.font = '700 58px "Noto Sans KR", sans-serif'; c.fillText(d.head, 110, 200);
+  c.font = '500 38px "Noto Sans KR", sans-serif'; c.fillStyle = '#333'; c.fillText(d.sub, 110, 268);
+  c.font = '400 30px "Noto Sans KR", sans-serif'; c.fillStyle = '#666'; c.fillText(d.meta, 110, 324);
+  c.fillStyle = '#ccc'; c.fillRect(110, 360, cv.width-220, 2);
+  c.fillStyle = '#222'; let y = 450;
+  for(const l of d.body){ c.font = /^(학습목표|과제 내용|평가 기준|Ⅰ|Ⅱ|Ⅲ|\d\. )/.test(l) ? '700 34px "Noto Sans KR", sans-serif' : '400 32px "Noto Sans KR", sans-serif'; c.fillText(l, 110, y); y += l ? 62 : 30; }
+  c.font = '400 24px "Noto Sans KR", sans-serif'; c.fillStyle = '#999'; c.fillText('표지공방 데모용 예시 문서', 110, cv.height-80);
+  const blob = await new Promise(r => cv.toBlob(r, 'image/png'));
+  const text = [d.head, d.sub, d.meta, ...d.body].join('\n');
+  return Object.assign(new File([blob], d.name, {type:'image/png', lastModified: Date.now() - 864e5*3}), {__demo:{text, out:d.out}});
+}
+async function demoOut(f){
+  await sleep(1300 + Math.random()*700);
+  const o = JSON.parse(JSON.stringify(f.demo.out));
+  o.evidence = (o.evidence||[]).map(e => ({...e, quote: fillDue(e.quote)}));
+  const sj = S.subjects.find(x => x.name === o.subject); o.subjectId = sj ? sj.id : null;
+  if(o.assignment){ o.assignment.due = isoPlus(o.assignment.dueOffset); delete o.assignment.dueOffset; }
+  if(o.matchTask){ const t = (S.tasks||[]).find(x => !x.done && x.subjectId === o.subjectId && x.title.includes(o.matchTask)); o.matchTaskId = t ? t.id : null; }
+  return o;
+}
+let demoRunning = false;
+async function runDemo(){
+  if(demoRunning) return; demoRunning = true;
+  try{
+    setTab('make');
+    const list = await Promise.all(DEMO_DOCS.map(demoFile));
+    addFiles(list);
+    toast('데모 문서 3개를 넣었어요. 데모 AI가 차례로 읽어요.');
+  } finally { demoRunning = false; }
+}
+
 function fmtSize(b){ return b > 1e6 ? (b/1e6).toFixed(1)+'MB' : Math.max(1,Math.round(b/1e3))+'KB'; }
 
 function evidenceBox(f){
@@ -1305,6 +1364,7 @@ function evidenceBox(f){
   const t1 = find('제목')[0]; if(t1) rows.push(['제목', esc(f.title), q(t1)]);
   const by = f.sample ? '예시' : f.ai?.state === 'done' ? `${esc(f.ai.by)}가 읽음` : f.ai?.state === 'reading' ? '읽는 중' : '파일명·시간표 기준';
   return `<div class="wide aibox"><p class="aibox-h">${f.ai?.state === 'done' || ev.length ? 'AI가 찾은 것' : '자동으로 찾은 것'} <span class="chip ai">${by}</span></p>
+    ${f.demo ? '<p class="note" style="margin:0">데모 모드: 이 예시 문서에 맞춰 미리 준비한 AI 결과예요. ChatKHU 키를 넣으면 실제 파일을 같은 방식으로 읽어요.</p>' : ''}
     <ul>${rows.map(r => `<li><span class="ak">${r[0]}</span><b>${r[1]}</b>${r[2] ? `<span class="aq">${r[2]}</span>` : ''}</li>`).join('')}</ul></div>`;
 }
 function renderFiles(){
@@ -1325,7 +1385,7 @@ function renderFiles(){
         <button class="file-main" data-act="select" aria-expanded="${cur}">
           <span class="badge ${f.type}">${f.type==='image'?'IMG':f.type==='docx'?'DOC':'PDF'}</span>
           <span class="fmeta"><span class="fname">${esc(f.name)}</span>
-          <span class="fsub"><span class="chip cat ${catOf(f)}">${CAT[catOf(f)].label}</span>${chip}${teamOf(f) && catOf(f)==='submit' ? '<span class="chip">조별</span>' : ''}${aiChip}${f.taskFound ? '<span class="chip ex">마감일 찾음</span>' : ''}${f.taskId && S.tasks?.find(t => t.id === f.taskId) ? `<span class="chip">${esc(S.tasks.find(t => t.id === f.taskId).title)} 제출용</span>` : ''}<span>${esc(f.reason||'')}</span>${f.sample?'<span class="chip ex">예시</span>':`<span>${esc(f.meta||'')} · ${fmtSize(f.size)}</span>`}</span></span>
+          <span class="fsub"><span class="chip cat ${catOf(f)}">${CAT[catOf(f)].label}</span>${chip}${teamOf(f) && catOf(f)==='submit' ? '<span class="chip">조별</span>' : ''}${aiChip}${f.taskFound ? '<span class="chip ex">마감일 찾음</span>' : ''}${f.taskId && S.tasks?.find(t => t.id === f.taskId) ? `<span class="chip">${esc(S.tasks.find(t => t.id === f.taskId).title)} 제출용</span>` : ''}<span>${esc(f.reason||'')}</span>${f.sample?'<span class="chip ex">예시</span>':f.demo?'<span class="chip ex">데모</span>':`<span>${esc(f.meta||'')} · ${fmtSize(f.size)}</span>`}</span></span>
         </button>
         <button class="x" data-act="remove" aria-label="${esc(f.name)} 빼기">×</button>
       </div>
@@ -2241,8 +2301,9 @@ function renderAI(){
   const who = claudeAvail ? 'Claude' : P.label, model = $('#aiModel').selectedOptions[0]?.textContent.split('·').pop().trim() || S.ai.model;
   span.innerHTML = !S.ai.on ? '<b>꺼짐</b><small>파일명과 시간표로만 분류해요</small>'
     : ready ? `<b>${esc(who)} 연결됨</b><small>${esc(model)} · 새 파일의 앞 3쪽을 읽어요</small>`
-    : `<b>키가 필요해요</b><small><button class="linkbtn" id="aiLineGo">내 정보에서 ${esc(P.label)} 키 넣기</button></small>`;
+    : `<b>키 없이 체험할 수 있어요</b><small><button class="linkbtn" id="aiDemoGo">데모 문서로 AI 읽기 체험</button> · <button class="linkbtn" id="aiLineGo">키 넣기</button></small>`;
   $('#aiLineGo')?.addEventListener('click', () => { setTab('me'); $('#apiKey').focus(); });
+  $('#aiDemoGo')?.addEventListener('click', runDemo);
 }
 function storeKey(){
   for(const [k,p] of Object.entries(PROVIDERS)){
@@ -2267,6 +2328,7 @@ getSample().then(s => { claudeAvail = !!s; renderAI(); });
 
 /* ---------- banner & tabs ---------- */
 function renderBanner(){ $('#banner').hidden = !(S.isSample && S.banner); }
+$('#bannerDemo').addEventListener('click', runDemo);
 $('#hideBanner').addEventListener('click', () => { S.banner = false; save(); renderBanner(); });
 $('#clearSample').addEventListener('click', () => {
   S.isSample = false; S.profile = {name:'', school:'경희대학교', dept:'', sid:''}; S.subjects = [];
