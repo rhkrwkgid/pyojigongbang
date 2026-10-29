@@ -306,6 +306,33 @@ button.tcard:hover{border-color:var(--accent)}
 .wiz-list small{color:var(--muted)}
 .wiz-ok{color:var(--ok);font-weight:600;font-size:13.5px;margin:0}
 
+/* AI reading motion */
+.thumb{flex:none;width:40px;height:52px;border-radius:4px;overflow:hidden;position:relative;border:1px solid var(--line);background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.scanning::after{content:"";position:absolute;left:0;right:0;height:16px;top:-16px;background:linear-gradient(to bottom,transparent,color-mix(in srgb,var(--accent) 60%,transparent) 70%,var(--accent) 88%,transparent);animation:scan 1.2s ease-in-out infinite}
+@keyframes scan{to{top:100%}}
+.file.reading{border-color:var(--accent)}
+.file.reading .file-row{background:linear-gradient(90deg,transparent 0,var(--accent-soft) 50%,transparent 100%) 0 0/220% 100% no-repeat;animation:sweep 1.8s linear infinite}
+@keyframes sweep{from{background-position:120% 0}to{background-position:-120% 0}}
+.aibox .aq q{background:linear-gradient(color-mix(in srgb,var(--mark) 55%,transparent),color-mix(in srgb,var(--mark) 55%,transparent)) no-repeat 0 0/100% 100%}
+.aibox.fresh li{animation:rise .45s ease-out both;animation-delay:calc(var(--i,0) * .3s)}
+.aibox.fresh .aq q{animation:mark .6s ease-out both;animation-delay:calc(var(--i,0) * .3s + .25s)}
+@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@keyframes mark{from{background-size:0% 100%}to{background-size:100% 100%}}
+/* result dialog */
+.done-card{max-width:640px}
+.res-list{display:flex;flex-direction:column;gap:10px;max-height:min(52vh,460px);overflow:auto;padding-right:2px}
+.res{display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px;align-items:center;border:1px solid var(--line);border-radius:12px;padding:10px;background:var(--sunken)}
+.res canvas{width:46px;height:65px;border-radius:2px;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.2)}
+.res-names{min-width:0;display:flex;flex-direction:column;gap:3px}
+.res-before{font-size:12.5px;color:var(--muted);text-decoration:line-through;text-decoration-color:color-mix(in srgb,var(--danger) 60%,transparent);overflow-wrap:anywhere}
+.res-after{font-size:14px;font-weight:700;overflow-wrap:anywhere}
+.res-after::before{content:"→ ";color:var(--accent)}
+.res-meta{font-size:12px;color:var(--muted)}
+.res-sum{display:flex;flex-wrap:wrap;gap:8px}
+.res-sum span{background:var(--accent-soft);color:var(--accent);border-radius:999px;padding:4px 10px;font-size:12.5px;font-weight:700}
+@media (prefers-reduced-motion:reduce){.scanning::after,.file.reading .file-row,.aibox.fresh li,.aibox.fresh .aq q{animation:none}}
+
 /* timetable import */
 #tab-tt{display:flex;flex-direction:column;gap:16px}
 .tti{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px}
@@ -398,6 +425,7 @@ textarea:focus{border-color:var(--accent);outline:none;box-shadow:0 0 0 3px var(
 
           <p class="sub-h">표지에 넣을 정보</p>
           <div class="checks" id="showChecks"></div>
+          <label class="toggle"><input type="checkbox" id="edgeTab"> 옆면 과목 탭: 과목마다 오른쪽 가장자리의 다른 높이에 색 띠를 넣어, 인쇄물을 넘기면 과목별로 바로 찾을 수 있어요</label>
 
           <p class="sub-h">로고·그림</p>
           <span class="hint">경희대학교 공식 UI</span>
@@ -559,6 +587,15 @@ textarea:focus{border-color:var(--accent);outline:none;box-shadow:0 0 0 3px var(
       </div>
     </div>
   </div>
+  <div class="wiz" id="resDlg" hidden role="dialog" aria-modal="true" aria-labelledby="resTitle">
+    <div class="wiz-card done-card">
+      <h2 id="resTitle"></h2>
+      <div class="res-sum" id="resSum"></div>
+      <div class="res-list" id="resList"></div>
+      <p class="note" id="resNote"></p>
+      <div class="wiz-acts"><span class="grow"></span><button class="btn primary" id="resClose">확인</button></div>
+    </div>
+  </div>
   <div id="toast" role="status"></div>
 </div>
 
@@ -683,6 +720,7 @@ if(S.isSample && !S.v2){
 }
 S.v2 = true;
 if(!Array.isArray(S.links)) S.links = JSON.parse(JSON.stringify(DEFAULT_LINKS));
+if(S.design.edgeTab === undefined) S.design.edgeTab = true;
 if(!S.v4){
   if(!Array.isArray(S.tasks)) S.tasks = S.isSample ? sampleTasks() : [];
   if(S.isSample){
@@ -784,6 +822,27 @@ function sampleFiles(){
   b.evidence = [{field:'조원', quote:'3조 김하늘 박서준 이지민 최유나', page:1}, {field:'용도', quote:'팀 프로젝트 중간보고서 제출', page:1}];
   return [a,c,b];
 }
+async function makeThumb(f){
+  try{
+    let src;
+    if(f.type === 'image') src = await createImageBitmap(f.file, {imageOrientation:'from-image'});
+    else if(f.type === 'pdf'){
+      await ensurePdfjs();
+      const doc = await window.pdfjsLib.getDocument({data:new Uint8Array((await getBytes(f)).slice(0))}).promise;
+      try{
+        const pg = await doc.getPage(1), v0 = pg.getViewport({scale:1}), v = pg.getViewport({scale:200/v0.width});
+        const cv = document.createElement('canvas'); cv.width = Math.round(v.width); cv.height = Math.round(v.height);
+        const cx = cv.getContext('2d'); cx.fillStyle = '#fff'; cx.fillRect(0,0,cv.width,cv.height);
+        await pg.render({canvasContext:cx, viewport:v}).promise; src = cv;
+      } finally { doc.destroy(); }
+    } else return;
+    const cv = document.createElement('canvas'); cv.width = 80; cv.height = 104;
+    const cx = cv.getContext('2d'); cx.fillStyle = '#fff'; cx.fillRect(0,0,80,104);
+    const r = Math.max(80/src.width, 104/src.height), iw = src.width*r, ih = src.height*r;
+    cx.drawImage(src, (80-iw)/2, 0, iw, ih);
+    f.thumb = cv.toDataURL('image/jpeg', .8); renderFiles();
+  }catch(e){ /* 썸네일은 없어도 돼요 */ }
+}
 function detectType(file){
   const n = file.name.toLowerCase();
   if(n.endsWith('.pdf') || file.type === 'application/pdf') return 'pdf';
@@ -807,6 +866,7 @@ function addFiles(list){
       meta: type === 'image' ? '사진 1장' : type === 'docx' ? '워드 · 간이 변환' : 'PDF'};
     if(file.__demo){ f.demo = file.__demo; f.meta = '데모 문서'; }
     files.push(f); added++;
+    makeThumb(f);
     if(type === 'pdf') countPages(f);
     if(S.ai.on || f.demo) queueAI(f);
   }
@@ -1009,6 +1069,7 @@ async function analyze(f){
       .filter(e => e.field && e.quote)
       .map(e => ex.text ? ({...e, ok: nz(ex.text).includes(nz(e.quote)) || nz(f.name).includes(nz(e.quote))}) : ({...e, img:true, ok:true}))
       .filter(e => e.ok);
+    f.justRead = true;
     f.ai = {state:'done', scanned:!!ex.scanned, pages:ex.pages, by: be.kind === 'demo' ? '데모 AI' : be.kind === 'claude' ? 'Claude' : prov().label};
   }catch(e){ console.error(e); f.ai = {state:'error', msg:aiErr(e)}; }
   if(f.id === selectedId){ designCat = catOf(f); renderDesign(); }
@@ -1350,6 +1411,7 @@ function fmtSize(b){ return b > 1e6 ? (b/1e6).toFixed(1)+'MB' : Math.max(1,Math.
 
 function evidenceBox(f){
   const ev = f.evidence || [], find = k => ev.filter(e => e.field.includes(k));
+  const fresh = !!f.justRead; if(fresh) setTimeout(() => { f.justRead = false; }, 0);
   const q = e => `<q>${esc(e.quote)}</q>${e.page ? ` · ${e.page}쪽` : e.img ? ' · 이미지에서 읽음' : ''}`;
   const rows = [];
   const s = subj(f.subjectId);
@@ -1363,9 +1425,9 @@ function evidenceBox(f){
   if(tm) rows.push(['조원', `${esc(tm.name || '조')} · ${(tm.members||[]).length}명`, find('조원').map(q).join('<br>') || '과목에 저장된 조 정보']);
   const t1 = find('제목')[0]; if(t1) rows.push(['제목', esc(f.title), q(t1)]);
   const by = f.sample ? '예시' : f.ai?.state === 'done' ? `${esc(f.ai.by)}가 읽음` : f.ai?.state === 'reading' ? '읽는 중' : '파일명·시간표 기준';
-  return `<div class="wide aibox"><p class="aibox-h">${f.ai?.state === 'done' || ev.length ? 'AI가 찾은 것' : '자동으로 찾은 것'} <span class="chip ai">${by}</span></p>
+  return `<div class="wide aibox ${fresh ? 'fresh' : ''}"><p class="aibox-h">${f.ai?.state === 'done' || ev.length ? 'AI가 찾은 것' : '자동으로 찾은 것'} <span class="chip ai">${by}</span></p>
     ${f.demo ? '<p class="note" style="margin:0">데모 모드: 이 예시 문서에 맞춰 미리 준비한 AI 결과예요. ChatKHU 키를 넣으면 실제 파일을 같은 방식으로 읽어요.</p>' : ''}
-    <ul>${rows.map(r => `<li><span class="ak">${r[0]}</span><b>${r[1]}</b>${r[2] ? `<span class="aq">${r[2]}</span>` : ''}</li>`).join('')}</ul></div>`;
+    <ul>${rows.map((r,i) => `<li style="--i:${i}"><span class="ak">${r[0]}</span><b>${r[1]}</b>${r[2] ? `<span class="aq">${r[2]}</span>` : ''}</li>`).join('')}</ul></div>`;
 }
 function renderFiles(){
   const box = $('#fileList');
@@ -1380,10 +1442,10 @@ function renderFiles(){
       : a.state === 'done' ? `<span class="chip ai">${esc(a.by || 'AI')}가 읽음${a.scanned ? ' · 스캔본' : ''}</span>` : '';
     const aiNote = a.state === 'error' ? `<p class="err" style="margin:0 12px 10px">${esc(a.msg)}</p>`
       : a.state === 'nokey' ? `<p class="note" style="margin:0 12px 10px">AI 읽기를 쓰려면 <button class="linkbtn" data-act="gokey">내 정보 탭에서 API 키</button>를 넣어 주세요.</p>` : '';
-    return `<div class="file" data-id="${f.id}" aria-current="${cur}">
+    return `<div class="file ${a.state==='reading'?'reading':''}" data-id="${f.id}" aria-current="${cur}">
       <div class="file-row">
         <button class="file-main" data-act="select" aria-expanded="${cur}">
-          <span class="badge ${f.type}">${f.type==='image'?'IMG':f.type==='docx'?'DOC':'PDF'}</span>
+          ${f.thumb ? `<span class="thumb ${a.state==='reading'?'scanning':''}"><img src="${f.thumb}" alt=""></span>` : `<span class="badge ${f.type} ${a.state==='reading'?'scanning':''}">${f.type==='image'?'IMG':f.type==='docx'?'DOC':'PDF'}</span>`}
           <span class="fmeta"><span class="fname">${esc(f.name)}</span>
           <span class="fsub"><span class="chip cat ${catOf(f)}">${CAT[catOf(f)].label}</span>${chip}${teamOf(f) && catOf(f)==='submit' ? '<span class="chip">조별</span>' : ''}${aiChip}${f.taskFound ? '<span class="chip ex">마감일 찾음</span>' : ''}${f.taskId && S.tasks?.find(t => t.id === f.taskId) ? `<span class="chip">${esc(S.tasks.find(t => t.id === f.taskId).title)} 제출용</span>` : ''}<span>${esc(f.reason||'')}</span>${f.sample?'<span class="chip ex">예시</span>':f.demo?'<span class="chip ex">데모</span>':`<span>${esc(f.meta||'')} · ${fmtSize(f.size)}</span>`}</span></span>
         </button>
@@ -1487,7 +1549,7 @@ function coverOpt(D){
   const ov = (D.cat === 'material' ? R0.tplMat : R0.tplSubmit);
   const tpl = (ov && TEMPLATES[ov]) ? ov : tplFor(D.cat || 'submit');
   const fk = ds.font === 'auto' ? TEMPLATES[tpl].font : ds.font;
-  return { tpl, fs:FONTSETS[fk], accent:(ds.follow && D.color) ? D.color : ds.accent, show:ds.show, logo:IMG.logo, bgImg:IMG.bg, custom:ds.custom };
+  return { tpl, fs:FONTSETS[fk], accent:(ds.follow && D.color) ? D.color : ds.accent, show:ds.show, logo:IMG.logo, bgImg:IMG.bg, custom:ds.custom, edgeTab: ds.edgeTab !== false };
 }
 
 /* ---------- image cache ---------- */
@@ -1708,8 +1770,8 @@ const DRAW = {
     const label = (o.show.subject && D.subject) ? D.subject : D.kind;
     c.save(); c.translate(98, H-64); c.rotate(-Math.PI/2); c.textAlign = 'left'; c.textBaseline = 'middle'; c.fillStyle = on;
     const t = fit(c, label, s => FF(fs.tw,s,fs.title), H-130, 1, 60, 22); c.font = FF(fs.tw,t.size,fs.title); c.fillText(t.lines[0], 0, 0); c.restore();
-    c.fillStyle = A; rr(c, W-34, 64, 44, 140, 10); c.fill();
-    c.save(); c.translate(W-16, 134); c.rotate(Math.PI/2); c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillStyle = on; c.font = FF(fs.bb,12,fs.body); sp(c,3); c.fillText(D.kind, 0, 0); sp(c,0); c.restore();
+    if(!(o.edgeTab && D.subjectId && D.subject)){ c.fillStyle = A; rr(c, W-34, 64, 44, 140, 10); c.fill();
+    c.save(); c.translate(W-16, 134); c.rotate(Math.PI/2); c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillStyle = on; c.font = FF(fs.bb,12,fs.body); sp(c,3); c.fillText(D.kind, 0, 0); sp(c,0); c.restore(); }
     const L = B+44, R = W-64;
     c.textAlign = 'left'; c.textBaseline = 'alphabetic';
     if(o.show.school && D.school){ c.font = FF(fs.bw,12.5,fs.body); c.fillStyle = '#5E6878'; sp(c,1); c.fillText(ell(c,D.school,o.logo ? R-L-170 : R-L), L, 92); sp(c,0); }
@@ -1859,12 +1921,22 @@ async function ensureFonts(fs, D){
     ]);
   }catch(e){}
 }
+function drawEdgeTab(c,D,o){
+  const idx = S.subjects.findIndex(x => x.id === D.subjectId); if(idx < 0) return;
+  const n = Math.max(S.subjects.length, 4), top = 40, h = (H - top*2) / n, y = top + idx*h, w = 40, x = W - w;
+  const col = D.color || o.accent;
+  c.save(); c.fillStyle = col; rr(c, x, y+3, w+14, h-6, 9); c.fill();
+  c.translate(x + w/2 - 1, y + h/2); c.rotate(Math.PI/2);
+  c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillStyle = onCol(col); c.font = FF(o.fs.bb, 13, o.fs.body);
+  c.fillText(ell(c, D.subject || '', h - 20), 0, 0); c.restore();
+}
 function paint(canvas, k, D, o){
   canvas.width = Math.round(W*k); canvas.height = Math.round(H*k);
   const c = canvas.getContext('2d');
   c.setTransform(k,0,0,k,0,0);
   c.clearRect(0,0,W,H);
   DRAW[o.tpl](c,D,o);
+  if(o.edgeTab && D.subjectId && D.subject) drawEdgeTab(c,D,o);
 }
 
 /* ---------- preview ---------- */
@@ -1903,7 +1975,8 @@ async function renderDesignSummary(){
   const tok = ++dsumTok, box = $('#dsum');
   const logo = String(S.design.logo||'').startsWith('khu:') ? KHU_ASSETS[S.design.logo.slice(4)]?.label : (S.design.logo ? '직접 넣은 그림' : '없음');
   box.innerHTML = ['submit','material'].map(c => `<div class="mini"><canvas data-c="${c}"></canvas><span class="mk">${c==='submit'?'과제 표지':'자료 표지'}<b>${esc(TEMPLATES[tplFor(c)]?.name||'')}</b></span></div>`).join('')
-    + `<div class="mini"><span class="mk">로고<b>${esc(logo)}</b></span></div>`;
+    + `<div class="mini"><span class="mk">로고<b>${esc(logo)}</b></span></div>`
+    + `<div class="mini"><span class="mk">옆면 과목 탭<b>${S.design.edgeTab !== false ? '켜짐' : '꺼짐'}</b></span></div>`;
   for(const cv of box.querySelectorAll('canvas')){
     const f = virtualFor(cv.dataset.c), D = coverData(f), o = coverOpt(D);
     await ensureFonts(o.fs, D); if(tok !== dsumTok) return;
@@ -1945,6 +2018,7 @@ function renderDesign(){
   seg($('#catSeg'), [['submit','과제 표지'],['material','자료 표지']], designCat, v => { designCat = v; renderDesign(); renderThumbs(); });
   $('#catHint').textContent = designCat === 'submit' ? '과제·리포트·발표자료에 쓰여요' : '강의자료·정리 노트·실습자료에 쓰여요';
   $('#follow').checked = ds.follow;
+  $('#edgeTab').checked = ds.edgeTab !== false;
   $('#swatches').innerHTML = (ds.follow ? '<span class="hint">시간표의 과목 색이 표지에 들어가요. 과목이 없을 때 쓸 색:</span>' : '') +
     SWATCHES.map(([c,l]) => `<button class="sw" data-c="${c}" style="background:${c}" aria-label="${l}" title="${l}" aria-pressed="${c.toLowerCase()===ds.accent.toLowerCase()}"></button>`).join('') +
     `<input type="color" id="accentPick" value="${ds.accent}" aria-label="직접 색 고르기">`;
@@ -1968,6 +2042,7 @@ function renderDesign(){
   }
   [...$('#tplGrid').children].forEach(b => b.setAttribute('aria-pressed', String(b.dataset.tpl === tplFor(designCat))));
 }
+$('#edgeTab').addEventListener('change', e => { S.design.edgeTab = e.target.checked; save(); renderDesign(); schedule(); });
 $('#follow').addEventListener('change', e => { S.design.follow = e.target.checked; save(); renderDesign(); schedule(); });
 $('#swatches').addEventListener('click', e => { const b = e.target.closest('[data-c]'); if(!b) return; S.design.accent = b.dataset.c; save(); renderDesign(); schedule(); });
 $('#swatches').addEventListener('input', e => { if(e.target.id === 'accentPick'){ S.design.accent = e.target.value; save(); schedule(); } });
@@ -2105,6 +2180,27 @@ async function addContent(doc, f){
     }
   }
 }
+let resTok = 0;
+async function showResult(title, items, note){
+  const tok = ++resTok;
+  $('#resTitle').textContent = title;
+  const pages = items.reduce((a,x) => a + (x.pages||0), 0);
+  $('#resSum').innerHTML = `<span>파일 ${items.length}개</span><span>표지 ${items.length}장</span>${pages ? `<span>총 ${pages}쪽</span>` : ''}${S.duplex ? '<span>양면 인쇄용</span>' : ''}`;
+  $('#resList').innerHTML = items.map((x,i) => {
+    const s = subj(x.f.subjectId);
+    return `<div class="res"><canvas data-i="${i}"></canvas><div class="res-names"><span class="res-before">${esc(x.before)}</span><span class="res-after">${esc(x.after)}</span>
+      <span class="res-meta">${s ? esc(s.name)+' · ' : ''}${esc(CAT[catOf(x.f)].label)} · ${esc(x.f.kind||'')}${x.pages ? ` · ${x.pages}쪽` : ''}</span></div></div>`;
+  }).join('');
+  $('#resNote').textContent = note || '';
+  $('#resDlg').hidden = false; $('#resClose').focus();
+  for(const cv of $('#resList').querySelectorAll('canvas')){
+    const x = items[+cv.dataset.i], D = coverData(x.f), o = coverOpt(D);
+    await ensureFonts(o.fs, D); if(tok !== resTok) return;
+    paint(cv, 46*Math.min(window.devicePixelRatio||1,2)/W, D, o);
+  }
+}
+$('#resClose').addEventListener('click', () => { $('#resDlg').hidden = true; });
+document.addEventListener('keydown', e => { if(e.key === 'Escape' && !$('#resDlg').hidden) $('#resDlg').hidden = true; });
 function uniq(name, used){ if(!used.has(name)){ used.add(name); return name; } const b = name.replace(/\.pdf$/,''); let i = 2; while(used.has(`${b} (${i}).pdf`)) i++; const n = `${b} (${i}).pdf`; used.add(n); return n; }
 
 $('#exportBtn').addEventListener('click', async () => {
@@ -2118,21 +2214,25 @@ $('#exportBtn').addEventListener('click', async () => {
     const ymd = todayISO().replace(/-/g,'');
     if(mode === 'merge'){
       const doc = await PDFLib.PDFDocument.create();
-      for(let i=0;i<list.length;i++){ prog(i+1); await addCover(doc, list[i]); await addContent(doc, list[i]); }
-      const ok = await saveBlob(`${ymd}_${S.profile.name||'내'}_인쇄묶음.pdf`, new Blob([await doc.save()], {type:'application/pdf'}));
+      const items = [];
+      for(let i=0;i<list.length;i++){ prog(i+1); const n0 = doc.getPageCount(); await addCover(doc, list[i]); await addContent(doc, list[i]); items.push({f:list[i], before:list[i].name, after:`묶음 ${i+1}번째: ${list[i].title || list[i].name}`, pages: doc.getPageCount()-n0}); }
+      const outName = `${ymd}_${S.profile.name||'내'}_인쇄묶음.pdf`;
+      const ok = await saveBlob(outName, new Blob([await doc.save()], {type:'application/pdf'}));
       st.textContent = ok ? `PDF 하나에 ${list.length}개 파일을 묶었어요.` : '저장을 취소했어요.';
+      if(ok) showResult('인쇄 묶음을 만들었어요', items, `저장한 파일: ${outName}${S.duplex ? ' · 문서마다 앞면에서 시작해요' : ''}`);
     } else if(mode === 'cover'){
       const doc = await PDFLib.PDFDocument.create();
       for(let i=0;i<list.length;i++){ prog(i+1); await addCover(doc, list[i], false); }
       const name = list.length === 1 ? fname(list[0], '_표지.pdf') : `${ymd}_표지모음_${list.length}장.pdf`;
       const ok = await saveBlob(name, new Blob([await doc.save()], {type:'application/pdf'}));
       st.textContent = ok ? `표지 ${list.length}장을 만들었어요.` : '저장을 취소했어요.';
+      if(ok) showResult('표지를 만들었어요', list.map(f => ({f, before:f.name || '예시 문서', after:'표지 1장', pages:1})), `저장한 파일: ${name}`);
     } else {
       const used = new Set(), outs = [];
       for(let i=0;i<list.length;i++){
         prog(i+1);
         const doc = await PDFLib.PDFDocument.create(); await addCover(doc, list[i]); await addContent(doc, list[i]);
-        outs.push([uniq(fname(list[i]), used), await doc.save()]);
+        outs.push([uniq(fname(list[i]), used), await doc.save(), list[i], doc.getPageCount()]);
       }
       let ok;
       if(outs.length === 1) ok = await saveBlob(outs[0][0], new Blob([outs[0][1]], {type:'application/pdf'}));
@@ -2142,6 +2242,7 @@ $('#exportBtn').addEventListener('click', async () => {
         ok = await saveBlob(`${ymd}_표지공방_${outs.length}개.zip`, await zip.generateAsync({type:'blob'}));
       }
       st.textContent = ok ? `${outs.length}개 파일에 표지를 붙이고 이름을 정리했어요.` : '저장을 취소했어요.';
+      if(ok) showResult(`${outs.length}개 파일을 정리했어요`, outs.map(([n,,f,pg]) => ({f, before:f.name, after:n, pages:pg})), outs.length > 1 ? `ZIP 파일 하나로 묶어 저장했어요: ${ymd}_표지공방_${outs.length}개.zip` : '');
     }
     if(noSub) toast(`과목이 비어 있는 파일이 ${noSub}개 있어요. 표지에 과목 없이 들어갔어요.`);
   }catch(err){
